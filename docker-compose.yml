@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    container_name: schedule-service
+    command: gunicorn schedule.wsgi:application --bind 0.0.0.0:8000
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - DJANGO_DB_HOST=db
+      - DJANGO_DB_NAME=schedule_db
+      - DJANGO_DB_USER=schedule_user
+      - DJANGO_DB_PASSWORD=othersecretpassword
+    ports:
+      - "8008:8000"
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15-alpine
+    container_name: postgres-schedule-service
+    restart: always
+    environment:
+      POSTGRES_DB: schedule_db
+      POSTGRES_USER: schedule_user
+      POSTGRES_PASSWORD: othersecretpassword
+    volumes:
+      - postgres-schedule-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-schedule-data:
