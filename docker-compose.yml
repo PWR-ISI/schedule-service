@@ -2,16 +2,23 @@ services:
   app:
     build: .
     container_name: schedule-service
-    command: gunicorn schedule.wsgi:application --bind 0.0.0.0:8000
-    volumes:
-      - .:/app
     env_file:
       - .env
     environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-dev-not-secret-change-me}
+      - DEBUG=${DEBUG:-True}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
       - DJANGO_DB_HOST=db
+      - DJANGO_DB_PORT=5432
       - DJANGO_DB_NAME=schedule_db
       - DJANGO_DB_USER=schedule_user
       - DJANGO_DB_PASSWORD=othersecretpassword
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-}
+      - SCHEDULE_SNS_TOPIC_ARN=${SCHEDULE_SNS_TOPIC_ARN:-}
+      - EVENTS_SQS_QUEUE_URL=${EVENTS_SQS_QUEUE_URL:-}
+      - INTERNAL_SHARED_TOKEN=${INTERNAL_SHARED_TOKEN:-dev-internal-token}
+      - SLOT_RESERVATION_TTL_MINUTES=${SLOT_RESERVATION_TTL_MINUTES:-10}
     ports:
       - "8008:8000"
     depends_on:
