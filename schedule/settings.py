@@ -130,3 +130,4 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", default="INFO")},
 }
+
