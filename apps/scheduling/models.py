@@ -10,6 +10,12 @@ class SlotStatus(models.TextChoices):
     BLOCKED = "blocked", "Blocked"
 
 
+class AppointmentStatus(models.TextChoices):
+    SCHEDULED = "scheduled", "Scheduled"
+    CANCELLED = "cancelled", "Cancelled"
+    COMPLETED = "completed", "Completed"
+
+
 class DoctorSchedule(models.Model):
     """Recurring working-hours template; Slots are generated from it."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -67,3 +73,43 @@ class Slot(models.Model):
 
     def __str__(self) -> str:
         return f"Slot {self.id} doctor={self.doctor_id} {self.start_time}->{self.end_time} {self.status}"
+
+
+class Appointment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    patient_id = models.UUIDField(db_index=True)
+    slot = models.OneToOneField(Slot, on_delete=models.PROTECT, related_name="appointment")
+    status = models.CharField(
+        max_length=16,
+        choices=AppointmentStatus.choices,
+        default=AppointmentStatus.SCHEDULED,
+    )
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["patient_id", "-created_at"])]
+
+    def __str__(self) -> str:
+        return f"Appointment {self.id} patient={self.patient_id} status={self.status}"
+
+
+class AppointmentFile(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    appointment = models.ForeignKey(
+        Appointment, on_delete=models.CASCADE, related_name="files"
+    )
+    original_name = models.CharField(max_length=255)
+    s3_key = models.CharField(max_length=512)
+    content_type = models.CharField(max_length=100, default="application/octet-stream")
+    size_bytes = models.PositiveIntegerField(default=0)
+    uploaded_by = models.UUIDField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"AppointmentFile {self.id} appointment={self.appointment_id}"

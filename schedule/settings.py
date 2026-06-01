@@ -7,6 +7,9 @@ from pathlib import Path
 
 import environ
 
+# Configure logging
+from logging_config import configure_logging  # noqa: F401
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(DEBUG=(bool, False))
@@ -17,6 +20,7 @@ if env_file.exists():
 SECRET_KEY = env("DJANGO_SECRET_KEY", default="dev-not-secret-change-me")
 DEBUG = env("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
+APPEND_SLASH = False
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -27,12 +31,14 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "drf_spectacular",
+    "corsheaders",
     "common",
     "apps.scheduling",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "common.auth.JWTStubMiddleware",
@@ -40,7 +46,14 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "common.middleware.RequestLoggingMiddleware",
+    "common.middleware.MetricsMiddleware",
+    "common.middleware.UserContextMiddleware",
+    "common.middleware.ErrorHandlingMiddleware",
 ]
+
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = "schedule.urls"
 
@@ -97,11 +110,15 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
-    "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    "DEFAULT_PARSER_CLASSES": [
+        "rest_framework.parsers.JSONParser",
+        "rest_framework.parsers.MultiPartParser",
+    ],
     "DEFAULT_PAGINATION_CLASS": "common.pagination.DefaultPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "common.exceptions.exception_handler",
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
 }
 
 SPECTACULAR_SETTINGS = {
@@ -113,6 +130,7 @@ SPECTACULAR_SETTINGS = {
 
 AWS_REGION = env("AWS_REGION", default="us-east-1")
 AWS_ENDPOINT_URL = env("AWS_ENDPOINT_URL", default="") or None
+AWS_S3_BUCKET = env("AWS_S3_BUCKET", default="")
 SCHEDULE_SNS_TOPIC_ARN = env("SCHEDULE_SNS_TOPIC_ARN", default="")
 EVENTS_SQS_QUEUE_URL = env("EVENTS_SQS_QUEUE_URL", default="")
 
@@ -130,4 +148,11 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", default="INFO")},
 }
+
+# Monitoring & Observability
+ENVIRONMENT = env("ENVIRONMENT", default="development")
+SENTRY_DSN = env("SENTRY_DSN", default="")
+DATADOG_API_KEY = env("DATADOG_API_KEY", default="")
+CLOUDWATCH_LOG_GROUP = env("CLOUDWATCH_LOG_GROUP", default="/ecs/schedule-service")
+CLOUDWATCH_REGION = env("CLOUDWATCH_REGION", default=AWS_REGION)
 

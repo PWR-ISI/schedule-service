@@ -14,4 +14,7 @@ python manage.py makemigrations scheduling --noinput
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput || true
 
+# Seed sample slots if not already present
+python manage.py seed_slots --doctor-id "00000000-0000-0000-0000-000000000001" --days 30 || true
+
 exec "$@"

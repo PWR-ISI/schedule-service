@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
-from .models import DoctorSchedule, Slot, SlotStatus
+from .models import DoctorSchedule, Slot, SlotStatus, Appointment, AppointmentFile
+from .s3_utils import presigned_url
 
 
 class SlotSerializer(serializers.ModelSerializer):
@@ -53,3 +54,72 @@ class DoctorScheduleSerializer(serializers.ModelSerializer):
             "valid_until",
         )
         read_only_fields = ("id",)
+
+
+class AppointmentFileSerializer(serializers.ModelSerializer):
+    download_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AppointmentFile
+        fields = (
+            "id",
+            "original_name",
+            "content_type",
+            "size_bytes",
+            "created_at",
+            "download_url",
+        )
+        read_only_fields = ("id", "created_at")
+
+    def get_download_url(self, obj):
+        if obj.s3_key:
+            return presigned_url(obj.s3_key)
+        return None
+
+
+class AppointmentSerializer(serializers.ModelSerializer):
+    files = AppointmentFileSerializer(many=True, read_only=True)
+    appointment_date = serializers.SerializerMethodField()
+    doctor_id = serializers.SerializerMethodField()
+    doctor_name = serializers.SerializerMethodField()
+    patient_name = serializers.SerializerMethodField()
+    appointment_type = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Appointment
+        fields = (
+            "id",
+            "patient_id",
+            "doctor_id",
+            "doctor_name",
+            "patient_name",
+            "appointment_date",
+            "appointment_type",
+            "status",
+            "notes",
+            "files",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "created_at", "updated_at")
+
+    def get_appointment_date(self, obj):
+        return obj.slot.start_time.isoformat()
+
+    def get_doctor_id(self, obj):
+        return str(obj.slot.doctor_id)
+
+    def get_doctor_name(self, obj):
+        return f"Dr. {obj.slot.doctor_id}"  # Placeholder; real data would come from doctor service
+
+    def get_patient_name(self, obj):
+        return f"Patient {obj.patient_id}"  # Placeholder; real data would come from user service
+
+    def get_appointment_type(self, obj):
+        return "Regular"  # Placeholder; could be extended with actual types
+
+
+class AppointmentCreateSerializer(serializers.Serializer):
+    slot_id = serializers.UUIDField()
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    file = serializers.FileField(required=False, allow_null=True)
