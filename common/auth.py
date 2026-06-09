@@ -46,7 +46,8 @@ class JWTStubMiddleware:
                     options={"verify_signature": False, "verify_exp": False},
                 )
                 request.user_id = payload.get("sub")
-                request.user_role = payload.get("role")
+                # Cognito puts the role in the `custom:role` claim; fall back to `role`.
+                request.user_role = payload.get("custom:role") or payload.get("role")
             except jwt.PyJWTError as exc:
                 logger.warning("Failed to decode JWT: %s", exc)
 

@@ -131,8 +131,28 @@ class AppointmentViewSet(ViewSet):
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
-        patient_id = request.user_id
-        qs = Appointment.objects.filter(patient_id=patient_id)
+        """Role-aware listing:
+        - doctor  -> appointments on the doctor's own slots (slot.doctor_id)
+        - admin / receptionist / staff -> all (optionally filtered by ?doctor_id / ?patient_id)
+        - patient (default) -> own appointments
+        """
+        role = getattr(request, "user_role", None)
+        uid = request.user_id
+        qp_doctor = request.query_params.get("doctor_id")
+        qp_patient = request.query_params.get("patient_id")
+
+        qs = Appointment.objects.all()
+        if role == "doctor":
+            qs = qs.filter(slot__doctor_id=uid)
+        elif role in ("admin", "receptionist", "staff"):
+            if qp_doctor:
+                qs = qs.filter(slot__doctor_id=qp_doctor)
+            if qp_patient:
+                qs = qs.filter(patient_id=qp_patient)
+        else:
+            qs = qs.filter(patient_id=uid)
+
+        qs = qs.select_related("slot").order_by("-slot__start_time")
         return Response(AppointmentSerializer(qs, many=True).data)
 
     def retrieve(self, request, pk=None):
