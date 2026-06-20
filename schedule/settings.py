@@ -145,6 +145,14 @@ PAYMENTS_ENABLED = env.bool("PAYMENTS_ENABLED", default=False)
 PAYMENT_SERVICE_URL = env("PAYMENT_SERVICE_URL", default="http://host.docker.internal:8007")
 APPOINTMENT_PRICE_PLN = env("APPOINTMENT_PRICE_PLN", default="150.00")
 
+# Notification-service: appointment events are pushed straight to its internal /events/
+# endpoint (reachable from a task via the ALB DNS) so notifications appear immediately,
+# independent of the SNS/SQS consumer wiring.
+NOTIFICATION_SERVICE_URL = env(
+    "NOTIFICATION_SERVICE_URL",
+    default="http://prod-config-notification-alb.elb.localhost.localstack.cloud:4566",
+)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

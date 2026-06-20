@@ -1,6 +1,8 @@
 import logging
 
+import requests
 from django.conf import settings
+from django.db import IntegrityError
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status
@@ -63,7 +65,9 @@ class SlotViewSet(ViewSet):
             qs = qs.filter(start_time__date__gte=parse_date(date_from) or date_from)
         if date_to:
             qs = qs.filter(start_time__date__lte=parse_date(date_to) or date_to)
-        if slot_status:
+        if slot_status == "all":
+            pass  # every status (used by the doctor's slot-creation view)
+        elif slot_status:
             qs = qs.filter(status=slot_status)
         else:
             qs = qs.filter(status=SlotStatus.AVAILABLE)
@@ -78,9 +82,19 @@ class SlotViewSet(ViewSet):
         return Response(SlotSerializer(slot).data)
 
     def create(self, request):
-        serializer = SlotCreateSerializer(data=request.data)
+        # A doctor may only create slots for themselves; admins may create for any doctor.
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if getattr(request, "user_role", None) == "doctor" and request.user_id:
+            data["doctor_id"] = request.user_id
+        serializer = SlotCreateSerializer(data=data)
         serializer.is_valid(raise_exception=True)
-        slot = Slot.objects.create(**serializer.validated_data)
+        try:
+            slot = Slot.objects.create(**serializer.validated_data)
+        except IntegrityError:
+            return Response(
+                {"detail": "Slot w tym terminie już istnieje."},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(SlotSerializer(slot).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="reserve")
@@ -191,6 +205,7 @@ class AppointmentViewSet(ViewSet):
         payload = {
             "appointment_id": str(appointment.id),
             "patient_id": str(appointment.patient_id),
+            "doctor_id": str(appointment.slot.doctor_id),
             "slot_id": str(appointment.slot_id),
             "scheduled_start": appointment.slot.start_time.isoformat(),
             "status": appointment.status,
@@ -198,6 +213,27 @@ class AppointmentViewSet(ViewSet):
         if extra:
             payload.update(extra)
         publish(settings.SCHEDULE_SNS_TOPIC_ARN, event_type, payload)
+        self._notify(event_type, payload)
+
+    @staticmethod
+    def _notify(event_type, payload):
+        """Best-effort: push the event to notification-service so a notification is created
+        immediately (does not block, never raises)."""
+        url = getattr(settings, "NOTIFICATION_SERVICE_URL", "")
+        if not url:
+            return
+        try:
+            requests.post(
+                f"{url}/api/v2/events/",
+                json={"event_type": event_type, "payload": payload},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Internal-Token": settings.INTERNAL_SHARED_TOKEN,
+                },
+                timeout=5,
+            )
+        except Exception as exc:  # noqa: BLE001 - notifications are best-effort
+            logger.warning("Notify %s failed: %s", event_type, exc)
 
     def retrieve(self, request, pk=None):
         appointment, err = self._get_for_manage(request, pk)
