@@ -80,12 +80,21 @@ class IsReceptionist(_HasRole):
     required_roles = ("receptionist",)
 
 
+class IsStaff(_HasRole):
+    """Front-desk clerk / receptionist (the SPA uses the 'staff' role)."""
+    required_roles = ("staff", "receptionist")
+
+
 class IsAdmin(_HasRole):
     required_roles = ("admin",)
 
 
 class IsAdminOrDoctor(_HasRole):
     required_roles = ("admin", "doctor")
+
+
+class IsStaffOrAdmin(_HasRole):
+    required_roles = ("staff", "receptionist", "admin")
 
 
 class IsInternal(BasePermission):

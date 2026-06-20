@@ -11,9 +11,13 @@ class SlotStatus(models.TextChoices):
 
 
 class AppointmentStatus(models.TextChoices):
+    PENDING_PAYMENT = "pending_payment", "Pending payment"
+    PAID = "paid", "Paid"
     SCHEDULED = "scheduled", "Scheduled"
     CANCELLED = "cancelled", "Cancelled"
     COMPLETED = "completed", "Completed"
+    EXPIRED = "expired", "Expired"
+    FAILED = "failed", "Failed"
 
 
 class DoctorSchedule(models.Model):
@@ -85,6 +89,14 @@ class Appointment(models.Model):
         default=AppointmentStatus.SCHEDULED,
     )
     notes = models.TextField(blank=True, default="")
+    # Post-visit summary entered by the doctor when finishing a visit.
+    visit_summary = models.TextField(blank=True, default="")
+    # Reason recorded when a doctor/receptionist cancels a visit.
+    cancellation_reason = models.TextField(blank=True, default="")
+    # Link to the payment-service PayU order (when payments are enabled).
+    payment_order_id = models.CharField(max_length=64, blank=True, default="")
+    completed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

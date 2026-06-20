@@ -1,6 +1,7 @@
 import logging
 
 from django.conf import settings
+from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status
 from rest_framework.decorators import action
@@ -10,8 +11,10 @@ from rest_framework.viewsets import ViewSet
 from rest_framework.permissions import AllowAny
 from common.auth import IsAdmin, IsAdminOrDoctor, IsAuthenticated, IsInternal
 from common.events import publish
+from common import payments
+from common.exceptions import InvalidTransition
 
-from .models import DoctorSchedule, Slot, SlotStatus, Appointment, AppointmentFile
+from .models import DoctorSchedule, Slot, SlotStatus, Appointment, AppointmentFile, AppointmentStatus
 from .serializers import (
     DoctorScheduleSerializer,
     SlotCreateSerializer,
@@ -19,9 +22,18 @@ from .serializers import (
     SlotSerializer,
     AppointmentSerializer,
     AppointmentCreateSerializer,
+    AppointmentCancelSerializer,
+    AppointmentCompleteSerializer,
 )
 from .services import SchedulingService
 from .s3_utils import upload_appointment_file
+
+STAFF_ROLES = ("admin", "staff", "receptionist")
+ACTIVE_STATUSES = (
+    AppointmentStatus.SCHEDULED,
+    AppointmentStatus.PAID,
+    AppointmentStatus.PENDING_PAYMENT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,33 +167,77 @@ class AppointmentViewSet(ViewSet):
         qs = qs.select_related("slot").order_by("-slot__start_time")
         return Response(AppointmentSerializer(qs, many=True).data)
 
-    def retrieve(self, request, pk=None):
+    def _get_for_manage(self, request, pk):
+        """Fetch an appointment the caller may cancel/complete, or (None, error_response).
+        patient -> own; doctor -> own slot; admin/staff/receptionist -> any."""
+        role = getattr(request, "user_role", None)
+        uid = str(request.user_id)
         try:
-            appointment = Appointment.objects.get(pk=pk, patient_id=request.user_id)
+            appointment = Appointment.objects.select_related("slot").get(pk=pk)
         except Appointment.DoesNotExist:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+            return None, Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if role in STAFF_ROLES:
+            return appointment, None
+        if role == "doctor":
+            if str(appointment.slot.doctor_id) != uid:
+                return None, Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
+            return appointment, None
+        # patient (default)
+        if str(appointment.patient_id) != uid:
+            return None, Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        return appointment, None
+
+    def _publish_appointment(self, event_type, appointment, extra=None):
+        payload = {
+            "appointment_id": str(appointment.id),
+            "patient_id": str(appointment.patient_id),
+            "slot_id": str(appointment.slot_id),
+            "scheduled_start": appointment.slot.start_time.isoformat(),
+            "status": appointment.status,
+        }
+        if extra:
+            payload.update(extra)
+        publish(settings.SCHEDULE_SNS_TOPIC_ARN, event_type, payload)
+
+    def retrieve(self, request, pk=None):
+        appointment, err = self._get_for_manage(request, pk)
+        if err:
+            return err
         return Response(AppointmentSerializer(appointment).data)
 
     def create(self, request):
         serializer = AppointmentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        role = getattr(request, "user_role", None)
         slot_id = serializer.validated_data["slot_id"]
         notes = serializer.validated_data.get("notes", "")
         file_obj = serializer.validated_data.get("file")
 
+        # A receptionist/admin may book on behalf of a patient; everyone else books for self.
+        patient_id = str(request.user_id)
+        on_behalf = serializer.validated_data.get("patient_id")
+        if on_behalf and role in STAFF_ROLES:
+            patient_id = str(on_behalf)
+
         try:
             slot = Slot.objects.get(id=slot_id)
         except Slot.DoesNotExist:
-            return Response(
-                {"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        payments_on = settings.PAYMENTS_ENABLED
+        initial_status = (
+            AppointmentStatus.PENDING_PAYMENT if payments_on else AppointmentStatus.SCHEDULED
+        )
         appointment = Appointment.objects.create(
-            patient_id=request.user_id, slot=slot, notes=notes
+            patient_id=patient_id, slot=slot, notes=notes, status=initial_status
         )
 
-        SchedulingService.reserve(slot_id=slot_id, appointment_id=appointment.id)
+        try:
+            SchedulingService.reserve(slot_id=slot_id, appointment_id=appointment.id)
+        except Exception as exc:
+            appointment.delete()
+            return Response({"detail": f"Termin niedostępny: {exc}"}, status=status.HTTP_409_CONFLICT)
 
         if file_obj:
             try:
@@ -197,50 +253,99 @@ class AppointmentViewSet(ViewSet):
             except Exception as exc:
                 logger.error("Failed to upload file for appointment %s: %s", appointment.id, exc)
 
-        publish(
-            settings.SCHEDULE_SNS_TOPIC_ARN,
-            "appointment.created",
-            {
-                "appointment_id": str(appointment.id),
-                "patient_id": str(appointment.patient_id),
-                "slot_id": str(appointment.slot_id),
-                "appointment_time": slot.start_time.isoformat(),
-                "status": appointment.status,
-            },
-        )
+        redirect_uri = None
+        if payments_on:
+            # Open a PayU order; the visit stays pending_payment until payment.succeeded.
+            try:
+                order = payments.create_order(
+                    appointment_id=appointment.id,
+                    patient_id=patient_id,
+                    description=f"Wizyta lekarska {slot.start_time.date().isoformat()}",
+                )
+                appointment.payment_order_id = str(order.get("id") or order.get("order_id") or "")
+                appointment.save(update_fields=["payment_order_id", "updated_at"])
+                redirect_uri = (
+                    order.get("redirect_url") or order.get("redirect_uri") or order.get("redirectUri")
+                )
+            except Exception as exc:
+                logger.error("Payment order failed for appointment %s: %s", appointment.id, exc)
+                SchedulingService.release(slot_id=slot_id, force=True)
+                appointment.status = AppointmentStatus.FAILED
+                appointment.save(update_fields=["status", "updated_at"])
+                return Response(
+                    {"detail": "Nie udało się rozpocząć płatności.", "error": str(exc)},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+        else:
+            # No online payment: the slot is booked immediately.
+            try:
+                SchedulingService.confirm(slot_id=slot_id)
+            except InvalidTransition:
+                pass
 
-        return Response(
-            AppointmentSerializer(appointment).data, status=status.HTTP_201_CREATED
-        )
+        self._publish_appointment("appointment.created", appointment)
+
+        data = AppointmentSerializer(appointment).data
+        if redirect_uri:
+            data["redirect_uri"] = redirect_uri
+        return Response(data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
-        try:
-            appointment = Appointment.objects.get(pk=pk, patient_id=request.user_id)
-        except Appointment.DoesNotExist:
-            return Response(
-                {"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND
-            )
+        ser = AppointmentCancelSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        reason = ser.validated_data.get("reason", "")
 
-        if appointment.status != "scheduled":
+        appointment, err = self._get_for_manage(request, pk)
+        if err:
+            return err
+        if appointment.status not in ACTIVE_STATUSES:
             return Response(
-                {"detail": "Can only cancel scheduled appointments."},
+                {"detail": "Można odwołać tylko aktywną wizytę."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        appointment.status = "cancelled"
-        appointment.save()
+        was_paid = appointment.status == AppointmentStatus.PAID
+        appointment.status = AppointmentStatus.CANCELLED
+        appointment.cancellation_reason = reason
+        appointment.cancelled_at = timezone.now()
+        appointment.save(update_fields=["status", "cancellation_reason", "cancelled_at", "updated_at"])
 
-        SchedulingService.release(slot_id=appointment.slot_id)
+        try:
+            SchedulingService.release(slot_id=appointment.slot_id, force=True)
+        except InvalidTransition:
+            logger.info("Slot %s already released.", appointment.slot_id)
 
-        publish(
-            settings.SCHEDULE_SNS_TOPIC_ARN,
-            "appointment.cancelled",
-            {
-                "appointment_id": str(appointment.id),
-                "patient_id": str(appointment.patient_id),
-                "slot_id": str(appointment.slot_id),
-            },
-        )
+        # Refund a paid visit (best-effort; never blocks the cancellation).
+        if was_paid and settings.PAYMENTS_ENABLED:
+            payments.refund_for_appointment(appointment.id)
 
+        self._publish_appointment("appointment.cancelled", appointment, extra={"reason": reason})
+        return Response(AppointmentSerializer(appointment).data)
+
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        ser = AppointmentCompleteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        summary = ser.validated_data.get("visit_summary", "")
+
+        role = getattr(request, "user_role", None)
+        if role not in STAFF_ROLES + ("doctor",):
+            return Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
+
+        appointment, err = self._get_for_manage(request, pk)
+        if err:
+            return err
+        if appointment.status not in (AppointmentStatus.SCHEDULED, AppointmentStatus.PAID):
+            return Response(
+                {"detail": "Można zakończyć tylko aktywną wizytę."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        appointment.status = AppointmentStatus.COMPLETED
+        appointment.visit_summary = summary
+        appointment.completed_at = timezone.now()
+        appointment.save(update_fields=["status", "visit_summary", "completed_at", "updated_at"])
+
+        self._publish_appointment("appointment.completed", appointment, extra={"visit_summary": summary})
         return Response(AppointmentSerializer(appointment).data)

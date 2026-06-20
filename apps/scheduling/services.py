@@ -51,11 +51,12 @@ class SchedulingService:
 
     @staticmethod
     @transaction.atomic
-    def release(slot_id: UUID) -> Slot:
+    def release(slot_id: UUID, force: bool = False) -> Slot:
         slot = Slot.objects.select_for_update().get(id=slot_id)
         if slot.status == SlotStatus.AVAILABLE:
             return slot  # idempotent no-op
-        if slot.status == SlotStatus.CONFIRMED:
+        # A confirmed slot is only freed when its appointment is cancelled (force=True).
+        if slot.status == SlotStatus.CONFIRMED and not force:
             raise InvalidTransition("Cannot release a confirmed slot. Cancel the appointment first.")
         previous_appointment = slot.appointment_id
         slot.status = SlotStatus.AVAILABLE

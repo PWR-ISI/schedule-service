@@ -137,6 +137,14 @@ EVENTS_SQS_QUEUE_URL = env("EVENTS_SQS_QUEUE_URL", default="")
 INTERNAL_SHARED_TOKEN = env("INTERNAL_SHARED_TOKEN", default="dev-internal-token")
 SLOT_RESERVATION_TTL_MINUTES = env.int("SLOT_RESERVATION_TTL_MINUTES", default=10)
 
+# Payment integration (payment-service / PayU).
+# PAYMENTS_ENABLED gates the whole online-payment flow: when False (default, no PayU
+# credentials), booking confirms a visit immediately as before; when True, booking opens
+# a PayU order and the visit stays `pending_payment` until payment.succeeded arrives.
+PAYMENTS_ENABLED = env.bool("PAYMENTS_ENABLED", default=False)
+PAYMENT_SERVICE_URL = env("PAYMENT_SERVICE_URL", default="http://host.docker.internal:8007")
+APPOINTMENT_PRICE_PLN = env("APPOINTMENT_PRICE_PLN", default="150.00")
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

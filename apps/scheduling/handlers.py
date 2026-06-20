@@ -8,7 +8,7 @@ import logging
 
 from common.exceptions import InvalidTransition
 
-from .models import Slot, SlotStatus
+from .models import Slot, SlotStatus, Appointment, AppointmentStatus
 from .services import SchedulingService
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,15 @@ def _slot_for_appointment(appointment_id):
         return None
 
 
+def _appointment(appointment_id):
+    if not appointment_id:
+        return None
+    try:
+        return Appointment.objects.get(id=appointment_id)
+    except Appointment.DoesNotExist:
+        return None
+
+
 def handle_appointment_cancelled(payload: dict, envelope: dict = None):
     slot = _slot_for_appointment(payload.get("appointment_id"))
     if slot and slot.status in (SlotStatus.RESERVED,):
@@ -34,6 +43,10 @@ def handle_appointment_cancelled(payload: dict, envelope: dict = None):
 
 
 def handle_payment_failed(payload: dict, envelope: dict = None):
+    appt = _appointment(payload.get("appointment_id"))
+    if appt and appt.status == AppointmentStatus.PENDING_PAYMENT:
+        appt.status = AppointmentStatus.FAILED
+        appt.save(update_fields=["status", "updated_at"])
     slot = _slot_for_appointment(payload.get("appointment_id"))
     if slot and slot.status == SlotStatus.RESERVED:
         try:
@@ -43,6 +56,10 @@ def handle_payment_failed(payload: dict, envelope: dict = None):
 
 
 def handle_payment_succeeded(payload: dict, envelope: dict = None):
+    appt = _appointment(payload.get("appointment_id"))
+    if appt and appt.status == AppointmentStatus.PENDING_PAYMENT:
+        appt.status = AppointmentStatus.PAID
+        appt.save(update_fields=["status", "updated_at"])
     slot = _slot_for_appointment(payload.get("appointment_id"))
     if slot and slot.status == SlotStatus.RESERVED:
         try:

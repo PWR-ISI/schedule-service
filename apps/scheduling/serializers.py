@@ -97,6 +97,11 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "appointment_type",
             "status",
             "notes",
+            "visit_summary",
+            "cancellation_reason",
+            "payment_order_id",
+            "completed_at",
+            "cancelled_at",
             "files",
             "created_at",
             "updated_at",
@@ -123,3 +128,14 @@ class AppointmentCreateSerializer(serializers.Serializer):
     slot_id = serializers.UUIDField()
     notes = serializers.CharField(required=False, allow_blank=True, default="")
     file = serializers.FileField(required=False, allow_null=True)
+    # Set by a receptionist/admin booking on behalf of a patient. Ignored for patients
+    # (they always book for themselves).
+    patient_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class AppointmentCancelSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class AppointmentCompleteSerializer(serializers.Serializer):
+    visit_summary = serializers.CharField(required=False, allow_blank=True, default="")
