@@ -57,7 +57,8 @@ def handle_payment_failed(payload: dict, envelope: dict = None):
 
 def handle_payment_succeeded(payload: dict, envelope: dict = None):
     appt = _appointment(payload.get("appointment_id"))
-    if appt and appt.status == AppointmentStatus.PENDING_PAYMENT:
+    # Accept both PENDING_PAYMENT and SCHEDULED — payment may be initiated after booking
+    if appt and appt.status in (AppointmentStatus.PENDING_PAYMENT, AppointmentStatus.SCHEDULED):
         appt.status = AppointmentStatus.PAID
         appt.save(update_fields=["status", "updated_at"])
     slot = _slot_for_appointment(payload.get("appointment_id"))
