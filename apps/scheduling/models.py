@@ -82,7 +82,7 @@ class Slot(models.Model):
 class Appointment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     patient_id = models.UUIDField(db_index=True)
-    slot = models.OneToOneField(Slot, on_delete=models.PROTECT, related_name="appointment")
+    slot = models.ForeignKey(Slot, on_delete=models.PROTECT, related_name="appointments")
     status = models.CharField(
         max_length=16,
         choices=AppointmentStatus.choices,

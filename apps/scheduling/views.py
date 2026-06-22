@@ -319,7 +319,8 @@ class AppointmentViewSet(ViewSet):
             except InvalidTransition:
                 pass
 
-        self._publish_appointment("appointment.created", appointment)
+        self._publish_appointment("appointment.created", appointment,
+                                  extra={"patient_email": getattr(request, "user_email", "")})
 
         data = AppointmentSerializer(appointment).data
         if redirect_uri:
