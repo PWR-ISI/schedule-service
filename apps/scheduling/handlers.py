@@ -56,12 +56,28 @@ def handle_payment_failed(payload: dict, envelope: dict = None):
 
 
 def handle_payment_succeeded(payload: dict, envelope: dict = None):
-    appt = _appointment(payload.get("appointment_id"))
-    # Accept both PENDING_PAYMENT and SCHEDULED — payment may be initiated after booking
+    from django.conf import settings
+    from common.events import publish
+
+    appointment_id = payload.get("appointment_id")
+    appt = _appointment(appointment_id)
+    slot = _slot_for_appointment(appointment_id)
+
+    # Accept both PENDING_PAYMENT and SCHEDULED — payment may arrive after booking
     if appt and appt.status in (AppointmentStatus.PENDING_PAYMENT, AppointmentStatus.SCHEDULED):
         appt.status = AppointmentStatus.PAID
         appt.save(update_fields=["status", "updated_at"])
-    slot = _slot_for_appointment(payload.get("appointment_id"))
+        # Publish appointment.paid so notification-service emails the patient.
+        # notification-service is subscribed to this SNS topic; on_appointment_paid
+        # is idempotent so a duplicate from payment.succeeded path is harmless.
+        publish(settings.SCHEDULE_SNS_TOPIC_ARN, "appointment.paid", {
+            "appointment_id": str(appt.id),
+            "patient_id": str(appt.patient_id),
+            "doctor_id": str(slot.doctor_id) if slot else "",
+            "scheduled_start": slot.start_time.isoformat() if slot else "",
+            "status": appt.status,
+        })
+
     if slot and slot.status == SlotStatus.RESERVED:
         try:
             SchedulingService.confirm(slot.id)
